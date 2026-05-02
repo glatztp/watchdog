@@ -1,0 +1,80 @@
+
+# Node
+node_modules/
+dist/
+coverage/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+package-lock.json
+pnpm-lock.yaml
+yarn.lock
+
+# TypeScript
+*.tsbuildinfo
+
+# Environment files
+.env*
+
+.next/
+
+# OS
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Icon?
+Desktop.ini
+
+# Editor directories and files
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Mac system files
+.AppleDouble
+.LSOverride
+
+# Windows system files
+*.stackdump
+
+# Misc
+*.log
+*.pid
+*.seed
+*.pid.lock
+*.tgz
+*.bak
+*.tmp
+*.orig
+*.rej
+
+# Test output
+test-output/
+test-results/
+coverage/
+
+# Build artifacts
+build/
+out/
+tmp/
+temp/
+
+# Optional npm cache directory
+.npm/
+
+.eslintcache
+
+.stylelintcache
+
+.node_repl_history
+
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
