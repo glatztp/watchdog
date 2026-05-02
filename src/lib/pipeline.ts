@@ -184,10 +184,14 @@ export async function runPipeline(
     });
   }
 
-  await sendScanReport(summary).catch((err: unknown) => {
+  try {
+    await sendScanReport(summary);
+    emit({ type: "email:sent", to: process.env.DEPGUARD_EMAIL_TO ?? "" });
+  } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     logger.error("Email report failed", { error: message });
-  });
+    emit({ type: "email:failed", error: message });
+  }
 
   logger.info("Pipeline finished", {
     org,

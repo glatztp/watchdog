@@ -96,6 +96,18 @@ function handleEvent(event: PipelineEvent) {
       break;
     }
 
+    case "email:sent": {
+      success("Email report sent");
+      info(`Report sent to: ${event.to}`);
+      break;
+    }
+
+    case "email:failed": {
+      if (currentSpinner) currentSpinner.stop();
+      error(`Failed to send email: ${event.error}`);
+      break;
+    }
+
     case "done": {
       if (currentSpinner) currentSpinner.stop();
       const { summary } = event;
@@ -148,8 +160,6 @@ function handleEvent(event: PipelineEvent) {
       }
 
       console.log("\n");
-      success("Email report sent");
-      info(`Report sent to: ${summary.org}`);
 
       // Show history comparison
       const comparison = getScanComparison(summary.org, summary);

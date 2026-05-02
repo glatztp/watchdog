@@ -110,6 +110,8 @@ export const PipelineEventSchema = z.discriminatedUnion("type", [
   }),
   z.object({ type: z.literal("done"), summary: OrgScanSummarySchema }),
   z.object({ type: z.literal("error"), repo: z.string(), message: z.string() }),
+  z.object({ type: z.literal("email:sent"), to: z.string() }),
+  z.object({ type: z.literal("email:failed"), error: z.string() }),
 ]);
 export type PipelineEvent = z.infer<typeof PipelineEventSchema>;
 
