@@ -1,7 +1,33 @@
 import { Octokit } from "@octokit/rest";
 import type { Dependency, Repo } from "@/schemas";
 
-const octokit = new Octokit({ auth: process.env.GITHUB_TOKEN });
+if (!process.env.GITHUB_TOKEN) {
+  console.warn(
+    "⚠ GITHUB_TOKEN not set. Using unauthenticated requests (limited to 60 req/hr)",
+  );
+}
+
+const octokit = new Octokit({
+  auth: process.env.GITHUB_TOKEN,
+  throttle: {
+    onRateLimit: (retryAfter, options, octokit) => {
+      octokit.log.warn(
+        `Rate limit exceeded. Retrying after ${retryAfter} seconds`,
+      );
+      return true;
+    },
+    onAbuseLimit: (retryAfter, options, octokit) => {
+      octokit.log.warn(
+        `Abuse limit hit. Retrying after ${retryAfter} seconds`,
+      );
+      return true;
+    },
+  },
+});
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 async function isOrg(name: string): Promise<boolean> {
   try {
@@ -115,7 +141,9 @@ export async function scanOrg(org: string): Promise<Map<Repo, Dependency[]>> {
   const repos = await listOrgRepos(org);
   const result = new Map<Repo, Dependency[]>();
 
-  const CONCURRENCY_LIMIT = 10;
+  // Reduced concurrency limit for better rate limit handling
+  const CONCURRENCY_LIMIT = 3;
+  const REQUEST_DELAY_MS = 100; // 100ms delay between requests
   const chunked: Repo[][] = [];
 
   for (let i = 0; i < repos.length; i += CONCURRENCY_LIMIT) {
@@ -126,6 +154,7 @@ export async function scanOrg(org: string): Promise<Map<Repo, Dependency[]>> {
     await Promise.allSettled(
       chunk.map(async (repo) => {
         try {
+          await delay(REQUEST_DELAY_MS);
           const deps = await extractDepsFromRepo(repo);
           if (deps.length > 0) result.set(repo, deps);
         } catch (err: unknown) {
