@@ -9,6 +9,12 @@ if (!org) {
   process.exit(1);
 }
 
+const GLOBAL_TIMEOUT_MS = 30 * 60 * 1000;
+const timeoutHandle = setTimeout(() => {
+  console.error("\n❌ Pipeline timeout exceeded (30 minutes)");
+  process.exit(124);
+}, GLOBAL_TIMEOUT_MS);
+
 const SEVERITY_ICON: Record<string, string> = {
   CRITICAL: "🔴",
   HIGH: "🟠",
@@ -79,7 +85,14 @@ function handleEvent(event: PipelineEvent) {
   }
 }
 
-runPipeline(org, { onEvent: handleEvent }).catch((err) => {
-  console.error("Pipeline failed:", err.message);
-  process.exit(1);
-});
+runPipeline(org, { onEvent: handleEvent })
+  .then(() => {
+    clearTimeout(timeoutHandle);
+    process.exit(0);
+  })
+  .catch((err: unknown) => {
+    clearTimeout(timeoutHandle);
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("Pipeline failed:", message);
+    process.exit(1);
+  });

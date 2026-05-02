@@ -1,3 +1,5 @@
+import type { Dependency, Repo } from "@/schemas";
+
 export const PACKAGE_WATCHLIST: Record<string, string[]> = {
   "ansi-regex": ["6.2.1"],
   "ansi-styles": ["6.2.2"],
@@ -49,8 +51,8 @@ export const PACKAGE_WATCHLIST: Record<string, string[]> = {
   "wrap-ansi": ["9.0.1"],
 };
 
-export function getWatchlistDependencies(repo: any): any[] {
-  const deps = [];
+export function getWatchlistDependencies(repo: Repo): Dependency[] {
+  const deps: Dependency[] = [];
 
   for (const [name, versions] of Object.entries(PACKAGE_WATCHLIST)) {
     for (const version of versions) {
@@ -59,7 +61,7 @@ export function getWatchlistDependencies(repo: any): any[] {
         version,
         type: "dependency",
         repo,
-      });
+      } as Dependency);
     }
   }
 

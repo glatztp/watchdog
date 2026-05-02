@@ -2,7 +2,15 @@ import type { Dependency, SupplyChainRisk, SupplyChainSignal } from "@/schemas";
 
 const NPM_REGISTRY = "https://registry.npmjs.org";
 
-const SUSPICIOUS_PATTERNS = [
+interface SuspiciousPattern {
+  re: RegExp;
+  type: SupplyChainSignal["type"];
+  severity: SupplyChainSignal["severity"];
+  detail: string;
+  minContext?: number;
+}
+
+const SUSPICIOUS_PATTERNS: SuspiciousPattern[] = [
   {
     re: /eval\s*\(/,
     type: "obfuscated-code" as const,
@@ -57,25 +65,65 @@ async function fetchNpmMetadata(
   name: string,
 ): Promise<NpmPackageMetadata | null> {
   try {
-    const res = await fetch(`${NPM_REGISTRY}/${encodeURIComponent(name)}`);
-    if (!res.ok) return null;
-    return res.json();
-  } catch {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 5000);
+
+    try {
+      const res = await fetch(`${NPM_REGISTRY}/${encodeURIComponent(name)}`, {
+        signal: controller.signal,
+      });
+      if (!res.ok) return null;
+      return res.json();
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  } catch (err: unknown) {
+    if (err instanceof Error && err.name === "AbortError") {
+      console.warn(`[supply-chain] Timeout fetching metadata for ${name}`);
+    }
     return null;
   }
 }
+
+const MAX_TARBALL_SIZE = 5 * 1024 * 1024;
 
 async function fetchPackageTarball(
   name: string,
   version: string,
 ): Promise<string | null> {
   try {
-    const tarballUrl = `${NPM_REGISTRY}/${encodeURIComponent(name)}/-/${name}-${version}.tgz`;
-    const res = await fetch(tarballUrl);
-    if (!res.ok) return null;
-    const buf = await res.arrayBuffer();
-    return Buffer.from(buf).toString("latin1");
-  } catch {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 5000);
+
+    try {
+      const tarballUrl = `${NPM_REGISTRY}/${encodeURIComponent(name)}/-/${name}-${version}.tgz`;
+      const res = await fetch(tarballUrl, { signal: controller.signal });
+      if (!res.ok) return null;
+
+      const contentLength = res.headers.get("content-length");
+      if (contentLength && parseInt(contentLength) > MAX_TARBALL_SIZE) {
+        console.warn(`[supply-chain] Tarball too large for ${name}@${version}`);
+        return null;
+      }
+
+      const buf = await res.arrayBuffer();
+      if (buf.byteLength > MAX_TARBALL_SIZE) {
+        console.warn(
+          `[supply-chain] Tarball exceeded size limit for ${name}@${version}`,
+        );
+        return null;
+      }
+
+      return Buffer.from(buf).toString("latin1");
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  } catch (err: unknown) {
+    if (err instanceof Error && err.name === "AbortError") {
+      console.warn(
+        `[supply-chain] Timeout fetching tarball for ${name}@${version}`,
+      );
+    }
     return null;
   }
 }
@@ -88,20 +136,33 @@ function checkMaintainerSignals(
   const publishedAt = meta.time[version];
   if (!publishedAt) return signals;
 
-  const publishDate = new Date(publishedAt);
-
   const versions = Object.keys(meta.versions);
   const versionIndex = versions.indexOf(version);
-  if (versionIndex > 5) {
-    const prevVersions = versions.slice(0, versionIndex);
-    const currentMaintainers = meta.maintainers.map((m) => m.name);
+  if (versionIndex <= 0) return signals;
 
-    if (currentMaintainers.length > meta.maintainers.length) {
-      signals.push({
-        type: "new-maintainer",
-        severity: "high",
-        detail: `Maintainer count changed: possible ownership transfer`,
-      });
+  const prevVersion = versions[versionIndex - 1];
+  const versionData = meta.versions[version];
+  const prevVersionData = meta.versions[prevVersion];
+
+  if (versionIndex > 10) {
+    const oldVersions = versions.slice(0, versionIndex - 10);
+    const recentVersions = versions.slice(
+      Math.max(0, versionIndex - 10),
+      versionIndex,
+    );
+
+    if (oldVersions.length > 0 && recentVersions.length > 0) {
+      const timeBetween =
+        new Date(meta.time[recentVersions[0]]).getTime() -
+        new Date(meta.time[oldVersions[oldVersions.length - 1]]).getTime();
+
+      if (timeBetween > 0 && timeBetween < 30 * 24 * 60 * 60 * 1000) {
+        signals.push({
+          type: "new-maintainer",
+          severity: "high",
+          detail: `Unusual release velocity: ${recentVersions.length} versions in short timeframe`,
+        });
+      }
     }
   }
 
@@ -141,14 +202,31 @@ function checkCodeSignals(tarballContent: string): SupplyChainSignal[] {
 
   for (const pattern of SUSPICIOUS_PATTERNS) {
     if (seen.has(pattern.detail)) continue;
-    if (pattern.re.test(tarballContent)) {
-      signals.push({
-        type: pattern.type,
-        severity: pattern.severity,
-        detail: pattern.detail,
-      });
-      seen.add(pattern.detail);
+
+    // Check if pattern matches
+    const matches = pattern.re.test(tarballContent);
+    if (!matches) continue;
+
+    // Validate context size to reduce false positives
+    const contextSize = pattern.minContext || 0;
+    if (contextSize > 0) {
+      const matchIdx = tarballContent.search(pattern.re);
+      if (matchIdx > 0) {
+        const context = tarballContent.substring(
+          Math.max(0, matchIdx - contextSize),
+          matchIdx + contextSize,
+        );
+        // Skip if context contains comments or strings that typically have false positives
+        if (context.includes("//") || context.includes("/*")) continue;
+      }
     }
+
+    signals.push({
+      type: pattern.type,
+      severity: pattern.severity,
+      detail: pattern.detail,
+    });
+    seen.add(pattern.detail);
   }
 
   return signals;
@@ -167,15 +245,29 @@ export async function analyzeSupplyChain(
 ): Promise<SupplyChainRisk> {
   const signals: SupplyChainSignal[] = [];
 
-  const meta = await fetchNpmMetadata(dep.name);
-  if (meta) {
-    signals.push(...checkMaintainerSignals(meta, dep.version));
-    signals.push(...checkInstallScriptSignals(meta, dep.version));
+  try {
+    const meta = await fetchNpmMetadata(dep.name);
+    if (meta) {
+      signals.push(...checkMaintainerSignals(meta, dep.version));
+      signals.push(...checkInstallScriptSignals(meta, dep.version));
+    }
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.warn(
+      `[supply-chain] Error analyzing npm metadata for ${dep.name}: ${message}`,
+    );
   }
 
-  const tarball = await fetchPackageTarball(dep.name, dep.version);
-  if (tarball) {
-    signals.push(...checkCodeSignals(tarball));
+  try {
+    const tarball = await fetchPackageTarball(dep.name, dep.version);
+    if (tarball) {
+      signals.push(...checkCodeSignals(tarball));
+    }
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.warn(
+      `[supply-chain] Error analyzing code for ${dep.name}@${dep.version}: ${message}`,
+    );
   }
 
   return {

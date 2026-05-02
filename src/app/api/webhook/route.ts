@@ -31,9 +31,10 @@ export async function POST(req: NextRequest) {
   if (!org)
     return Response.json({ error: "No org in payload" }, { status: 400 });
 
-  runPipeline(org, { autoFix: true }).catch((err) =>
-    console.error("[watchdog/webhook]", err.message),
-  );
+  runPipeline(org, { autoFix: true }).catch((err: unknown) => {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[watchdog/webhook]", message);
+  });
 
   return Response.json({ triggered: true, org });
 }

@@ -131,3 +131,12 @@ export type PipelineOptions = Omit<
 > & {
   onEvent?: (event: PipelineEvent) => void;
 };
+export interface AppError extends Error {
+  code?: string;
+  statusCode?: number;
+}
+export function getErrorMessage(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  if (typeof err === "string") return err;
+  return String(err);
+}

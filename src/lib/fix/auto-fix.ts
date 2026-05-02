@@ -3,7 +3,16 @@ import type { PullRequest, Vulnerability } from "@/schemas";
 
 const octokit = new Octokit({ auth: process.env.GITHUB_TOKEN });
 
-async function getPackageJsonSha(owner: string, repo: string, branch: string) {
+interface PackageJsonResponse {
+  sha: string;
+  content: string;
+}
+
+async function getPackageJsonSha(
+  owner: string,
+  repo: string,
+  branch: string,
+): Promise<PackageJsonResponse> {
   const { data } = await octokit.repos.getContent({
     owner,
     repo,
@@ -11,9 +20,11 @@ async function getPackageJsonSha(owner: string, repo: string, branch: string) {
     ref: branch,
   });
   if (!("sha" in data)) throw new Error("package.json not found");
+  if (!("content" in data))
+    throw new Error("Could not retrieve package.json content");
   return {
     sha: data.sha,
-    content: Buffer.from((data as any).content, "base64").toString("utf-8"),
+    content: Buffer.from(data.content as string, "base64").toString("utf-8"),
   };
 }
 
@@ -22,17 +33,29 @@ function bumpVersion(
   pkgName: string,
   fixedVersion: string,
 ): string {
-  const pkg = JSON.parse(content);
+  try {
+    const pkg: Record<string, unknown> = JSON.parse(content);
 
-  if (pkg.dependencies?.[pkgName]) {
-    pkg.dependencies[pkgName] = fixedVersion;
-  }
-  if (pkg.devDependencies?.[pkgName]) {
-    pkg.devDependencies[pkgName] = fixedVersion;
-  }
+    if (typeof pkg.dependencies === "object" && pkg.dependencies !== null) {
+      (pkg.dependencies as Record<string, string>)[pkgName] = fixedVersion;
+    }
+    if (
+      typeof pkg.devDependencies === "object" &&
+      pkg.devDependencies !== null
+    ) {
+      (pkg.devDependencies as Record<string, string>)[pkgName] = fixedVersion;
+    }
 
-  return JSON.stringify(pkg, null, 2) + "\n";
-}
+    const result = JSON.stringify(pkg, null, 2) + "\n";
+    JSON.parse(result);
+    return result;
+  } catch (err: unknown) {
+    const message =
+      err instanceof Error ? err.message : String(err);
+    throw new Error(
+      `Failed to update package.json for ${pkgName}: ${message}`,
+    );
+  }}
 
 function buildPRBody(vulns: Vulnerability[]): string {
   const lines: string[] = [
@@ -69,8 +92,16 @@ export async function createFixPR(
   defaultBranch: string,
   vulns: Vulnerability[],
 ): Promise<PullRequest | null> {
-  const fixable = vulns.filter((v) => v.fixedVersion !== null);
+  const fixable = vulns.filter(
+    (v) =>
+      v.fixedVersion !== null &&
+      v.fixedVersion !== undefined &&
+      v.fixedVersion.length > 0,
+  );
   if (fixable.length === 0) return null;
+
+  const validated = fixable.filter((v) => /^\d+(\.\d+)*/.test(v.fixedVersion!));
+  if (validated.length === 0) return null;
 
   const branchName = `watchdog/fix-${Date.now()}`;
 
@@ -90,7 +121,7 @@ export async function createFixPR(
 
   const { sha, content } = await getPackageJsonSha(owner, repo, defaultBranch);
   let updated = content;
-  for (const v of fixable) {
+  for (const v of validated) {
     updated = bumpVersion(updated, v.dependency.name, v.fixedVersion!);
   }
 
@@ -99,26 +130,28 @@ export async function createFixPR(
     owner,
     repo,
     path: "package.json",
-    message: `fix(deps): bump ${fixable.map((v) => v.dependency.name).join(", ")} [Watchdog]`,
+    message: `fix(deps): bump ${validated.map((v) => v.dependency.name).join(", ")} [Watchdog]`,
     content: Buffer.from(updated).toString("base64"),
     sha,
     branch: branchName,
   });
 
-  const pkgNames = [...new Set(fixable.map((v) => v.dependency.name))];
+  const pkgNames = [...new Set(validated.map((v) => v.dependency.name))];
   const { data: pr } = await octokit.pulls.create({
     owner,
     repo,
     head: branchName,
     base: defaultBranch,
     title: `fix(deps): patch ${pkgNames.length} vulnerabilit${pkgNames.length > 1 ? "ies" : "y"} [Watchdog]`,
-    body: buildPRBody(fixable),
+    body: buildPRBody(validated),
   });
 
-  return {
+  const pullRequest: PullRequest = {
     url: pr.html_url,
     number: pr.number,
     repo: `${owner}/${repo}`,
     title: pr.title,
   };
+
+  return pullRequest;
 }

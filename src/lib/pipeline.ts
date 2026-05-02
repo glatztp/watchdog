@@ -12,6 +12,7 @@ import type {
   Severity,
   PipelineEvent,
   PipelineOptions,
+  Dependency,
 } from "@/schemas";
 
 const SEVERITY_ORDER: Record<Severity, number> = {
@@ -38,23 +39,35 @@ export async function runPipeline(
   const emit = (e: PipelineEvent) => onEvent?.(e);
   const startedAt = new Date();
 
-  const repoDepMap = await scanOrg(org);
+  let repoDepMap: Map<Repo, Dependency[]>;
+  try {
+    repoDepMap = await scanOrg(org);
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    emit({ type: "error", repo: "org-scan", message });
+    throw new Error(`Failed to scan organization: ${message}`);
+  }
   const repos = [...repoDepMap.keys()];
 
   emit({ type: "start", org, totalRepos: repos.length });
 
   const results: ScanResult[] = [];
+  const allFixedPRs: PullRequest[] = [];
   let totalDeps = 0;
 
   for (const repo of repos) {
     emit({ type: "repo:scanning", repo: repo.name });
     let deps = repoDepMap.get(repo) ?? [];
-    const watchlistDeps = getWatchlistDependencies(repo);
+    const watchlistDeps = getWatchlistDependencies(repo) ?? [];
     deps = [...deps, ...watchlistDeps];
 
-    totalDeps += deps.length;
+    if (deps.length === 0) {
+      emit({ type: "repo:done", repo: repo.name, vulns: 0, risks: 0 });
+      continue;
+    }
 
-    const fixedPRs: PullRequest[] = [];
+    totalDeps += deps.length;
+    const repoPRs: PullRequest[] = [];
 
     try {
       const vulnerabilities = await checkVulnerabilities(deps);
@@ -71,12 +84,14 @@ export async function runPipeline(
           repo.name,
           repo.defaultBranch,
           vulnerabilities,
-        ).catch((err) => {
-          console.error(`[watchdog/autofix] ${repo.name}:`, err.message);
+        ).catch((err: unknown) => {
+          const message = err instanceof Error ? err.message : String(err);
+          console.error(`[watchdog/autofix] ${repo.name}:`, message);
           return null;
         });
         if (pr) {
-          fixedPRs.push(pr);
+          repoPRs.push(pr);
+          allFixedPRs.push(pr);
           emit({ type: "repo:fixed", repo: repo.name, prUrl: pr.url });
         }
       }
@@ -85,7 +100,7 @@ export async function runPipeline(
         repo,
         vulnerabilities,
         supplyChainRisks,
-        fixedPRs,
+        fixedPRs: repoPRs,
         scannedAt: new Date(),
       });
 
@@ -95,13 +110,25 @@ export async function runPipeline(
         vulns: vulnerabilities.length,
         risks: supplyChainRisks.length,
       });
-    } catch (err: any) {
-      emit({ type: "error", repo: repo.name, message: err.message });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      emit({ type: "error", repo: repo.name, message });
     }
   }
 
   const allVulns = results.flatMap((r) => r.vulnerabilities);
-  const criticalVulns = allVulns.filter(
+
+  // Deduplicate vulnerabilities by unique key
+  const vulnMap = new Map<string, (typeof allVulns)[0]>();
+  for (const vuln of allVulns) {
+    const key = `${vuln.id}@${vuln.dependency.name}@${vuln.dependency.version}`;
+    if (!vulnMap.has(key)) {
+      vulnMap.set(key, vuln);
+    }
+  }
+  const deduplicatedVulns = Array.from(vulnMap.values());
+
+  const criticalVulns = deduplicatedVulns.filter(
     (v) => v.severity === "CRITICAL",
   ).length;
   const highRiskPackages = results
@@ -112,7 +139,7 @@ export async function runPipeline(
     org,
     totalRepos: repos.length,
     totalDeps,
-    totalVulns: allVulns.length,
+    totalVulns: deduplicatedVulns.length,
     criticalVulns,
     highRiskPackages,
     results: results.sort((a, b) => {
@@ -130,9 +157,10 @@ export async function runPipeline(
     finishedAt: new Date(),
   };
 
-  await sendScanReport(summary).catch((err) =>
-    console.error("[watchdog/email]", err.message),
-  );
+  await sendScanReport(summary).catch((err: unknown) => {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[watchdog/email]", message);
+  });
 
   emit({ type: "done", summary });
   return summary;

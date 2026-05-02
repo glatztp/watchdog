@@ -71,6 +71,22 @@ export async function readPackageJson(
   }
 }
 
+function resolveVersionRange(versionSpec: string): string | null {
+  if (!versionSpec) return null;
+
+  let version = versionSpec.split("-")[0].split("+")[0].trim();
+
+  version = version
+    .replace(/^[\^~>=<]+/, "")
+    .split(" ")[0]
+    .split("x")[0]
+    .split("*")[0];
+
+  if (!/^\d+(\.\d+)*$/.test(version)) return null;
+
+  return version;
+}
+
 export async function extractDepsFromRepo(repo: Repo): Promise<Dependency[]> {
   const pkg = await readPackageJson(repo);
   if (!pkg) return [];
@@ -82,10 +98,10 @@ export async function extractDepsFromRepo(repo: Repo): Promise<Dependency[]> {
     type: Dependency["type"],
   ) => {
     if (!map) return;
-    for (const [name, version] of Object.entries(map)) {
-      const cleaned = version.replace(/[\^~>=<]/g, "").split(" ")[0];
-      if (!cleaned || cleaned.includes("*")) continue;
-      deps.push({ name, version: cleaned, type, repo });
+    for (const [name, versionSpec] of Object.entries(map)) {
+      const resolved = resolveVersionRange(versionSpec);
+      if (!resolved) continue;
+      deps.push({ name, version: resolved, type, repo });
     }
   };
 
@@ -99,12 +115,26 @@ export async function scanOrg(org: string): Promise<Map<Repo, Dependency[]>> {
   const repos = await listOrgRepos(org);
   const result = new Map<Repo, Dependency[]>();
 
-  await Promise.allSettled(
-    repos.map(async (repo) => {
-      const deps = await extractDepsFromRepo(repo);
-      if (deps.length > 0) result.set(repo, deps);
-    }),
-  );
+  const CONCURRENCY_LIMIT = 10;
+  const chunked: Repo[][] = [];
+
+  for (let i = 0; i < repos.length; i += CONCURRENCY_LIMIT) {
+    chunked.push(repos.slice(i, i + CONCURRENCY_LIMIT));
+  }
+
+  for (const chunk of chunked) {
+    await Promise.allSettled(
+      chunk.map(async (repo) => {
+        try {
+          const deps = await extractDepsFromRepo(repo);
+          if (deps.length > 0) result.set(repo, deps);
+        } catch (err: unknown) {
+          const message = err instanceof Error ? err.message : String(err);
+          console.warn(`[scanner] Failed to scan ${repo.name}: ${message}`);
+        }
+      }),
+    );
+  }
 
   return result;
 }
