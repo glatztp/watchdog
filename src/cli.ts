@@ -11,7 +11,6 @@ import {
   success,
   error,
   info,
-  warning,
   severity,
   createVulnTable,
   createStatsTable,
@@ -61,7 +60,6 @@ function handleEvent(event: PipelineEvent) {
     case "repo:scanning": {
       if (currentSpinner) currentSpinner.stop();
       repoCount++;
-      const progress = createProgressBar(repoCount - 1, totalRepos);
       const text = `[${repoCount}/${totalRepos}] Scanning ${chalk.cyan(event.repo)}`;
       currentSpinner = spinner(text);
       break;
