@@ -4,6 +4,8 @@ import { analyzeSupplyChainBatch } from "./vuln/supply-chain";
 import { createFixPR } from "./fix/auto-fix";
 import { sendScanReport } from "./notify/email";
 import { getWatchlistDependencies } from "./vuln/watchlist";
+import { logger } from "./logger";
+import { saveScan, getScanComparison } from "./history";
 import type {
   OrgScanSummary,
   PullRequest,
@@ -38,12 +40,18 @@ export async function runPipeline(
 
   const emit = (e: PipelineEvent) => onEvent?.(e);
   const startedAt = new Date();
+  logger.info("Pipeline started", { org, options });
 
   let repoDepMap: Map<Repo, Dependency[]>;
   try {
     repoDepMap = await scanOrg(org);
+    logger.info("Organization scan completed", {
+      org,
+      repoCount: repoDepMap.size,
+    });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
+    logger.error("Organization scan failed", { org, error: message });
     emit({ type: "error", repo: "org-scan", message });
     throw new Error(`Failed to scan organization: ${message}`);
   }
@@ -70,7 +78,15 @@ export async function runPipeline(
     const repoPRs: PullRequest[] = [];
 
     try {
+      logger.debug("Checking vulnerabilities", {
+        repo: repo.name,
+        depCount: deps.length,
+      });
       const vulnerabilities = await checkVulnerabilities(deps);
+      logger.info("Vulnerability check done", {
+        repo: repo.name,
+        vulnCount: vulnerabilities.length,
+      });
 
       const supplyChainRisks = supplyChainAnalysis
         ? (await analyzeSupplyChainBatch(deps)).filter(
@@ -118,7 +134,6 @@ export async function runPipeline(
 
   const allVulns = results.flatMap((r) => r.vulnerabilities);
 
-  // Deduplicate vulnerabilities by unique key
   const vulnMap = new Map<string, (typeof allVulns)[0]>();
   for (const vuln of allVulns) {
     const key = `${vuln.id}@${vuln.dependency.name}@${vuln.dependency.version}`;
@@ -157,9 +172,28 @@ export async function runPipeline(
     finishedAt: new Date(),
   };
 
+  saveScan(summary);
+  const comparison = getScanComparison(org, summary);
+
+  if (comparison) {
+    logger.info("Scan comparison", {
+      status: comparison.status,
+      vulnsDiff: comparison.totalVulnsDiff,
+      newVulns: comparison.newVulnerabilities,
+      fixedVulns: comparison.fixedVulnerabilities,
+    });
+  }
+
   await sendScanReport(summary).catch((err: unknown) => {
     const message = err instanceof Error ? err.message : String(err);
-    console.error("[watchdog/email]", message);
+    logger.error("Email report failed", { error: message });
+  });
+
+  logger.info("Pipeline finished", {
+    org,
+    duration: Math.round((new Date().getTime() - startedAt.getTime()) / 1000),
+    vulns: summary.totalVulns,
+    criticalVulns: summary.criticalVulns,
   });
 
   emit({ type: "done", summary });

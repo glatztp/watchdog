@@ -1,6 +1,8 @@
 #!/usr/bin/env tsx
 import chalk from "chalk";
 import { runPipeline } from "./lib/pipeline";
+import { getScanComparison, getHistoryPath } from "./lib/history";
+import { logger } from "./lib/logger";
 import type { PipelineEvent } from "@/schemas";
 import {
   header,
@@ -150,6 +152,27 @@ function handleEvent(event: PipelineEvent) {
       console.log("\n");
       success("Email report sent");
       info(`Report sent to: ${summary.org}`);
+
+      // Show history comparison
+      const comparison = getScanComparison(summary.org, summary);
+      if (comparison) {
+        section("📊 Comparison vs Last Scan");
+        console.log(
+          `  Status: ${colors[comparison.status === "improved" ? "success" : comparison.status === "degraded" ? "error" : "warning"](comparison.status.toUpperCase())}`,
+        );
+        console.log(
+          `  Vulnerabilities: ${comparison.totalVulnsDiff > 0 ? colors.error("+" + comparison.totalVulnsDiff) : colors.success(String(comparison.totalVulnsDiff))} (${comparison.vulnPercentageChange}%)`,
+        );
+        console.log(
+          `  New findings: ${colors.error(String(comparison.newVulnerabilities))}`,
+        );
+        console.log(
+          `  Fixed: ${colors.success("✓ " + comparison.fixedVulnerabilities)}`,
+        );
+      }
+
+      info(`History saved to: ${getHistoryPath(summary.org)}`);
+      logger.info("CLI execution completed successfully", { org: summary.org });
       divider();
       console.log("");
       break;

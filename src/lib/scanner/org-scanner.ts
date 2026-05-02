@@ -1,29 +1,15 @@
 import { Octokit } from "@octokit/rest";
+import { rateLimiter } from "../rate-limiter";
+import { logger } from "../logger";
 import type { Dependency, Repo } from "@/schemas";
 
 if (!process.env.GITHUB_TOKEN) {
-  console.warn(
-    "⚠ GITHUB_TOKEN not set. Using unauthenticated requests (limited to 60 req/hr)",
+  logger.warn(
+    "GITHUB_TOKEN not set. Using unauthenticated requests (limited to 60 req/hr)",
   );
 }
 
-const octokit = new Octokit({
-  auth: process.env.GITHUB_TOKEN,
-  throttle: {
-    onRateLimit: (retryAfter, options, octokit) => {
-      octokit.log.warn(
-        `Rate limit exceeded. Retrying after ${retryAfter} seconds`,
-      );
-      return true;
-    },
-    onAbuseLimit: (retryAfter, options, octokit) => {
-      octokit.log.warn(
-        `Abuse limit hit. Retrying after ${retryAfter} seconds`,
-      );
-      return true;
-    },
-  },
-});
+const octokit = rateLimiter.getOctokit();
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));

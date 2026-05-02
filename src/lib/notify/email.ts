@@ -1,4 +1,6 @@
 import { Resend } from "resend";
+import { getScanComparison } from "../history";
+import { logger } from "../logger";
 import type { OrgScanSummary, SupplyChainRisk, Vulnerability } from "@/schemas";
 
 let resend: Resend | null = null;

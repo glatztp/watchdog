@@ -135,6 +135,20 @@ export interface AppError extends Error {
   code?: string;
   statusCode?: number;
 }
+
+export const ScanComparisonSchema = z.object({
+  previousScan: z.string(),
+  currentScan: z.string(),
+  totalVulnsDiff: z.number(),
+  criticalVulnsDiff: z.number(),
+  highRiskPackagesDiff: z.number(),
+  newVulnerabilities: z.number(),
+  fixedVulnerabilities: z.number(),
+  status: z.enum(["improved", "degraded", "stable"]),
+  vulnPercentageChange: z.string(),
+});
+export type ScanComparison = z.infer<typeof ScanComparisonSchema>;
+
 export function getErrorMessage(err: unknown): string {
   if (err instanceof Error) return err.message;
   if (typeof err === "string") return err;
