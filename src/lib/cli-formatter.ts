@@ -41,7 +41,7 @@ export function header(title: string) {
   console.log(chalk.bold.cyan("└" + "─".repeat(title.length + 2) + "┘"));
 }
 
-export function divider(char = "─") {
+export function divider() {
   console.log(chalk.gray("─".repeat(50)));
 }
 
