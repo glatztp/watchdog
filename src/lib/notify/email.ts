@@ -1,7 +1,17 @@
 import { Resend } from "resend";
 import type { OrgScanSummary, SupplyChainRisk, Vulnerability } from "@/schemas";
 
-const resend = new Resend(process.env.RESEND_API_KEY);
+let resend: Resend | null = null;
+
+function getResend(): Resend {
+  if (!resend) {
+    if (!process.env.RESEND_API_KEY) {
+      throw new Error("RESEND_API_KEY environment variable is not set");
+    }
+    resend = new Resend(process.env.RESEND_API_KEY);
+  }
+  return resend;
+}
 
 const FROM = process.env.DEPGUARD_EMAIL_FROM ?? "watchdog@yourdomain.com";
 const TO = (process.env.DEPGUARD_EMAIL_TO ?? "")
@@ -169,7 +179,8 @@ export async function sendScanReport(summary: OrgScanSummary): Promise<void> {
       ? `[Watchdog] Supply chain risk detected in ${summary.org}`
       : `[Watchdog] Scan complete — ${summary.totalVulns} vulnerabilities in ${summary.org}`;
 
-  await resend.emails.send({
+  const emailClient = getResend();
+  await emailClient.emails.send({
     from: FROM as string,
     to: TO as string[],
     subject,
