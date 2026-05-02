@@ -3,6 +3,7 @@ import { checkVulnerabilities } from "./vuln/osv-checker";
 import { analyzeSupplyChainBatch } from "./vuln/supply-chain";
 import { createFixPR } from "./fix/auto-fix";
 import { sendScanReport } from "./notify/email";
+import { getWatchlistDependencies } from "./vuln/watchlist";
 import type {
   OrgScanSummary,
   PullRequest,
@@ -47,7 +48,10 @@ export async function runPipeline(
 
   for (const repo of repos) {
     emit({ type: "repo:scanning", repo: repo.name });
-    const deps = repoDepMap.get(repo) ?? [];
+    let deps = repoDepMap.get(repo) ?? [];
+    const watchlistDeps = getWatchlistDependencies(repo);
+    deps = [...deps, ...watchlistDeps];
+
     totalDeps += deps.length;
 
     const fixedPRs: PullRequest[] = [];
